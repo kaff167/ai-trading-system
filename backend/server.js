@@ -52,8 +52,8 @@ app.use((req, res, next) => {
 app.get('/api/signal', (req, res) => {
   const symbol = req.query.symbol || 'EURUSD';
   
-  // Spawn Python process
-  const py = spawn('python', ['../ai-service/ai_inference.py', symbol]);
+  // Spawn Python process - PATH SUDAH DIPERBAIKI
+  const py = spawn('python3', ['./ai_inference.py', symbol]);
   let output = '';
   
   py.stdout.on('data', (data) => {
