@@ -1,315 +1,233 @@
-# ai-service/ai_inference.py
+# backend/ai_inference.py
 import sys
 import json
 import pandas as pd
 import numpy as np
+import ta
+import requests
 from datetime import datetime, timedelta
 
-# ============================================
-# KONFIGURASI
-# ============================================
-USE_MOCK = True
-
-# ============================================
-# FUNGSI AMBIL DATA HISTORIS (FIXED)
-# ============================================
-def get_historical_data(symbol, timeframe='1h', limit=200):
+def get_market_data(symbol):
     """
-    Ambil data historis (mock data untuk testing)
+    Ambil data market dari API (gunakan Alpha Vantage, Yahoo Finance, atau mock data)
     """
-    np.random.seed(42)
-    
-    # Generate price data realistis
-    if 'XAU' in symbol.upper() or 'GOLD' in symbol.upper():
-        base_price = 2000  # Gold
-        volatility = 20
-    else:
-        base_price = 1.1000  # Forex
-        volatility = 0.0010
-    
-    # Generate dates MANUAL (tanpa freq string)
-    if timeframe.lower() in ['1h', 'h', '1hour']:
-        hours_between = 1
-    elif timeframe.lower() in ['4h', '4hour']:
-        hours_between = 4
-    elif timeframe.lower() in ['1d', 'd', '1day']:
-        hours_between = 24
-    elif timeframe.lower() in ['15m', 'm15']:
-        hours_between = 0.25
-    elif timeframe.lower() in ['30m', 'm30']:
-        hours_between = 0.5
-    else:
-        hours_between = 1  # Default 1h
-    
-    # Generate dates dengan timedelta
-    dates = []
-    now = datetime.now()
-    for i in range(limit):
-        dates.append(now - timedelta(hours=hours_between * (limit - i - 1)))
-    
-    # Generate price data
-    prices = [base_price]
-    for i in range(1, limit):
-        change = np.random.normal(0, volatility)
-        prices.append(prices[-1] + change)
-    
-    prices = np.array(prices)
-    
-    # Buat OHLCV DataFrame
-    df = pd.DataFrame({
-        'timestamp': dates,
-        'open': prices + np.random.normal(0, volatility/2, limit),
-        'high': prices + np.abs(np.random.normal(0, volatility, limit)),
-        'low': prices - np.abs(np.random.normal(0, volatility, limit)),
-        'close': prices,
-        'volume': np.random.uniform(100, 1000, limit)
-    })
-    
-    return df
+    try:
+        # Mock data untuk demo - ganti dengan API real seperti Alpha Vantage/Yahoo Finance
+        # Contoh: https://www.alphavantage.co/query?function=FX_INTRADAY...
+        
+        # Generate mock OHLCV data
+        dates = pd.date_range(end=datetime.now(), periods=100, freq='15min')
+        base_price = 1850 if 'XAU' in symbol else 1.0800
+        
+        data = pd.DataFrame({
+            'timestamp': dates,
+            'open': base_price + np.random.randn(100) * 2,
+            'high': base_price + np.random.randn(100) * 2.5,
+            'low': base_price + np.random.randn(100) * 2.5,
+            'close': base_price + np.random.randn(100) * 2,
+            'volume': np.random.randint(100, 1000, 100)
+        })
+        
+        return data
+    except Exception as e:
+        print(f"Error fetching data: {e}", file=sys.stderr)
+        return None
 
-# ============================================
-# TECHNICAL INDICATORS
-# ============================================
 def calculate_indicators(df):
-    """Hitung semua technical indicators"""
+    """
+    Hitung technical indicators
+    """
+    # RSI
+    df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
     
-    # 1. RSI (14 period)
-    from ta.momentum import RSIIndicator
-    df['rsi'] = RSIIndicator(close=df['close'], window=14).rsi()
+    # MACD
+    df['macd'] = ta.trend.MACD(df['close']).macd()
+    df['macd_signal'] = ta.trend.MACD(df['close']).macd_signal()
     
-    # 2. MACD
-    from ta.trend import MACD
-    macd = MACD(close=df['close'])
-    df['macd'] = macd.macd()
-    df['macd_signal'] = macd.macd_signal()
-    df['macd_diff'] = macd.macd_diff()
+    # EMA
+    df['ema_20'] = ta.trend.EMAIndicator(df['close'], window=20).ema_indicator()
+    df['ema_50'] = ta.trend.EMAIndicator(df['close'], window=50).ema_indicator()
     
-    # 3. Moving Averages
-    from ta.trend import SMAIndicator, EMAIndicator
-    df['ema_20'] = EMAIndicator(close=df['close'], window=20).ema_indicator()
-    df['ema_50'] = EMAIndicator(close=df['close'], window=50).ema_indicator()
-    df['sma_200'] = SMAIndicator(close=df['close'], window=200).sma_indicator()
+    # Bollinger Bands
+    bb = ta.volatility.BollingerBands(df['close'], window=20)
+    df['bb_upper'] = bb.bollinger_hband()
+    df['bb_lower'] = bb.bollinger_lband()
+    df['bb_middle'] = bb.bollinger_mavg()
     
-    # 4. Bollinger Bands
-    from ta.volatility import BollingerBands
-    bb = BollingerBands(close=df['close'])
-    df['bb_high'] = bb.bollinger_hband()
-    df['bb_mid'] = bb.bollinger_mavg()
-    df['bb_low'] = bb.bollinger_lband()
+    # ATR (untuk calculate SL/TP)
+    df['atr'] = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range()
     
-    # 5. ATR (Average True Range)
-    from ta.volatility import AverageTrueRange
-    df['atr'] = AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
-    
-    # 6. Support/Resistance
-    df['resistance'] = df['high'].rolling(window=20).max()
-    df['support'] = df['low'].rolling(window=20).min()
+    # ADX
+    df['adx'] = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx()
     
     return df
 
-# ============================================
-# ANALISIS SIGNAL
-# ============================================
-def analyze_signal(df):
-    """Analisis multi-indicator untuk keputusan trading"""
-    latest = df.iloc[-1]
-    prev = df.iloc[-2]
+def calculate_sl_tp(df, action, mode='scalping'):
+    """
+    Hitung Stop Loss dan Take Profit berdasarkan ATR dan mode trading
+    """
+    current_price = df['close'].iloc[-1]
+    atr = df['atr'].iloc[-1]
     
-    signals = []
-    weights = []
-    reasoning = []
-    
-    # ===== 1. RSI ANALYSIS =====
-    if latest['rsi'] < 30:
-        signals.append('BUY')
-        weights.append(2)
-        reasoning.append(f"RSI oversold: {latest['rsi']:.1f}")
-    elif latest['rsi'] > 70:
-        signals.append('SELL')
-        weights.append(2)
-        reasoning.append(f"RSI overbought: {latest['rsi']:.1f}")
-    else:
-        signals.append('HOLD')
-        weights.append(1)
-        reasoning.append(f"RSI neutral: {latest['rsi']:.1f}")
-    
-    # ===== 2. MACD ANALYSIS =====
-    if latest['macd'] > latest['macd_signal'] and prev['macd'] <= prev['macd_signal']:
-        signals.append('BUY')
-        weights.append(3)
-        reasoning.append("MACD bullish crossover")
-    elif latest['macd'] < latest['macd_signal'] and prev['macd'] >= prev['macd_signal']:
-        signals.append('SELL')
-        weights.append(3)
-        reasoning.append("MACD bearish crossover")
-    else:
-        signals.append('HOLD')
-        weights.append(1)
-        reasoning.append("MACD no signal")
-    
-    # ===== 3. MOVING AVERAGE ANALYSIS =====
-    if latest['close'] > latest['ema_20'] > latest['ema_50']:
-        signals.append('BUY')
-        weights.append(2)
-        reasoning.append("EMA uptrend")
-    elif latest['close'] < latest['ema_20'] < latest['ema_50']:
-        signals.append('SELL')
-        weights.append(2)
-        reasoning.append("EMA downtrend")
-    else:
-        signals.append('HOLD')
-        weights.append(1)
-        reasoning.append("EMA sideways")
-    
-    # ===== 4. BOLLINGER BANDS =====
-    if latest['close'] < latest['bb_low']:
-        signals.append('BUY')
-        weights.append(2)
-        reasoning.append("Price below BB lower band")
-    elif latest['close'] > latest['bb_high']:
-        signals.append('SELL')
-        weights.append(2)
-        reasoning.append("Price above BB upper band")
-    else:
-        signals.append('HOLD')
-        weights.append(1)
-        reasoning.append("BB neutral")
-    
-    # ===== 5. SUPPORT/RESISTANCE =====
-    dist_to_support = (latest['close'] - latest['support']) / latest['close'] * 100
-    dist_to_resistance = (latest['resistance'] - latest['close']) / latest['close'] * 100
-    
-    if dist_to_support < 1:
-        signals.append('BUY')
-        weights.append(2)
-        reasoning.append(f"Near support ({dist_to_support:.2f}%)")
-    elif dist_to_resistance < 1:
-        signals.append('SELL')
-        weights.append(2)
-        reasoning.append(f"Near resistance ({dist_to_resistance:.2f}%)")
-    else:
-        signals.append('HOLD')
-        weights.append(1)
-        reasoning.append("Mid range")
-    
-    # ===== HITUNG KEPUTUSAN AKHIR =====
-    buy_score = sum(w for s, w in zip(signals, weights) if s == 'BUY')
-    sell_score = sum(w for s, w in zip(signals, weights) if s == 'SELL')
-    total_score = buy_score + sell_score
-    
-    if buy_score > sell_score:
-        action = 'BUY'
-        confidence = buy_score / total_score
-    elif sell_score > buy_score:
-        action = 'SELL'
-        confidence = sell_score / total_score
-    else:
-        action = 'HOLD'
-        confidence = 0.5
-    
-    return action, confidence, reasoning
-
-# ============================================
-# HITUNG SL/TP DINAMIS
-# ============================================
-def calculate_sl_tp(df, action):
-    """Hitung Stop Loss dan Take Profit dinamis"""
-    latest = df.iloc[-1]
-    current_price = latest['close']
-    atr = latest['atr']
-    
-    # Multiplier berdasarkan symbol
-    if 'XAU' in str(df.iloc[-1]).upper():
-        atr_multiplier = 2.0
-    else:
-        atr_multiplier = 1.5
+    if mode == 'scalping':
+        # Scalping: SL/TP lebih ketat
+        sl_multiplier = 1.5
+        tp_multiplier = 2.5
+    else:  # intraday
+        # Intraday: SL/TP lebih longgar
+        sl_multiplier = 2.5
+        tp_multiplier = 4.0
     
     if action == 'BUY':
-        sl_distance = atr * atr_multiplier
-        tp_distance = sl_distance * 2
-        
-        sl = min(current_price - sl_distance, latest['support'])
-        tp = current_price + tp_distance
-        
+        sl = current_price - (atr * sl_multiplier)
+        tp = current_price + (atr * tp_multiplier)
     elif action == 'SELL':
-        sl_distance = atr * atr_multiplier
-        tp_distance = sl_distance * 2
-        
-        sl = max(current_price + sl_distance, latest['resistance'])
-        tp = current_price - tp_distance
-    else:
+        sl = current_price + (atr * sl_multiplier)
+        tp = current_price - (atr * tp_multiplier)
+    else:  # HOLD
         sl = 0
         tp = 0
     
-    lot = 0.01
-    
-    return round(sl, 2), round(tp, 2), lot
+    return round(sl, 2), round(tp, 2)
 
-# ============================================
-# MAIN FUNCTION
-# ============================================
-def main():
-    symbol = sys.argv[1] if len(sys.argv) > 1 else 'EURUSD'
+def analyze_market(symbol, mode):
+    """
+    Analisis market dan generate signal
+    """
+    df = get_market_data(symbol)
     
-    print(f"🤖 AI analyzing {symbol}...", file=sys.stderr)
-    
-    try:
-        # 1. Ambil data
-        df = get_historical_data(symbol, '1h')
-        
-        # 2. Hitung indicators
-        df = calculate_indicators(df)
-        
-        # 3. Analisis signal
-        action, confidence, reasoning = analyze_signal(df)
-        
-        # 4. Hitung SL/TP
-        sl, tp, lot = calculate_sl_tp(df, action)
-        
-        # 5. Format output
-        result = {
-            "symbol": symbol,
-            "action": action,
-            "confidence": round(confidence, 3),
-            "sl": sl,
-            "tp": tp,
-            "lot": lot,
-            "reasoning": reasoning,
-            "current_price": round(df.iloc[-1]['close'], 2),
-            "indicators": {
-                "rsi": round(df.iloc[-1]['rsi'], 2),
-                "macd": round(df.iloc[-1]['macd'], 4),
-                "ema_20": round(df.iloc[-1]['ema_20'], 2),
-                "atr": round(df.iloc[-1]['atr'], 2)
-            }
-        }
-        
-        print(json.dumps(result))
-        
-        # Debug log
-        print(f"\n📊 Analysis for {symbol}:", file=sys.stderr)
-        print(f"Action: {action}", file=sys.stderr)
-        print(f"Confidence: {confidence:.1%}", file=sys.stderr)
-        print(f"Price: {result['current_price']}", file=sys.stderr)
-        print(f"SL: {sl} | TP: {tp}", file=sys.stderr)
-        print(f"Reasoning:", file=sys.stderr)
-        for r in reasoning:
-            print(f"  - {r}", file=sys.stderr)
-            
-    except Exception as e:
-        print(f"❌ Error: {str(e)}", file=sys.stderr)
-        import traceback
-        traceback.print_exc(file=sys.stderr)
-        result = {
+    if df is None or df.empty:
+        return {
             "symbol": symbol,
             "action": "HOLD",
-            "confidence": 0,
+            "confidence": 0.5,
             "sl": 0,
             "tp": 0,
             "lot": 0.01,
-            "error": str(e)
+            "reasoning": ["Error: Unable to fetch market data"],
+            "current_price": 0,
+            "indicators": {}
         }
-        print(json.dumps(result))
+    
+    df = calculate_indicators(df)
+    
+    # Get latest values
+    latest = df.iloc[-1]
+    rsi = latest['rsi']
+    macd = latest['macd']
+    macd_signal = latest['macd_signal']
+    ema_20 = latest['ema_20']
+    ema_50 = latest['ema_50']
+    bb_upper = latest['bb_upper']
+    bb_lower = latest['bb_lower']
+    atr = latest['atr']
+    adx = latest['adx']
+    current_price = latest['close']
+    
+    reasoning = []
+    action = "HOLD"
+    confidence = 0.5
+    
+    # RSI Analysis
+    if rsi < 30:
+        reasoning.append(f"RSI oversold: {rsi:.1f}")
+        rsi_signal = "BUY"
+    elif rsi > 70:
+        reasoning.append(f"RSI overbought: {rsi:.1f}")
+        rsi_signal = "SELL"
+    else:
+        reasoning.append(f"RSI neutral: {rsi:.1f}")
+        rsi_signal = "HOLD"
+    
+    # MACD Analysis
+    if macd > macd_signal:
+        reasoning.append("MACD bullish crossover")
+        macd_signal_action = "BUY"
+    elif macd < macd_signal:
+        reasoning.append("MACD bearish crossover")
+        macd_signal_action = "SELL"
+    else:
+        reasoning.append("MACD no signal")
+        macd_signal_action = "HOLD"
+    
+    # EMA Analysis
+    if ema_20 > ema_50:
+        reasoning.append("EMA uptrend")
+        ema_signal = "BUY"
+    elif ema_20 < ema_50:
+        reasoning.append("EMA downtrend")
+        ema_signal = "SELL"
+    else:
+        reasoning.append("EMA sideways")
+        ema_signal = "HOLD"
+    
+    # Bollinger Bands Analysis
+    if current_price < bb_lower:
+        reasoning.append("Price below BB lower band")
+        bb_signal = "BUY"
+    elif current_price > bb_upper:
+        reasoning.append("Price above BB upper band")
+        bb_signal = "SELL"
+    else:
+        reasoning.append("BB neutral")
+        bb_signal = "HOLD"
+    
+    # ADX - Trend Strength
+    if adx > 25:
+        reasoning.append(f"Strong trend (ADX: {adx:.1f})")
+    else:
+        reasoning.append(f"Weak trend (ADX: {adx:.1f})")
+    
+    # Combine signals
+    signals = [rsi_signal, macd_signal_action, ema_signal, bb_signal]
+    buy_count = signals.count("BUY")
+    sell_count = signals.count("SELL")
+    
+    # Determine action
+    if buy_count >= 3:
+        action = "BUY"
+        confidence = 0.5 + (buy_count * 0.1)
+    elif sell_count >= 3:
+        action = "SELL"
+        confidence = 0.5 + (sell_count * 0.1)
+    else:
+        action = "HOLD"
+        confidence = 0.5
+    
+    # Cap confidence at 0.95
+    confidence = min(confidence, 0.95)
+    
+    # Calculate SL/TP
+    sl, tp = calculate_sl_tp(df, action, mode)
+    
+    # Determine lot size based on mode
+    lot = 0.01 if mode == 'scalping' else 0.02
+    
+    return {
+        "symbol": symbol,
+        "action": action,
+        "confidence": round(confidence, 2),
+        "sl": sl,
+        "tp": tp,
+        "lot": lot,
+        "reasoning": reasoning,
+        "current_price": round(current_price, 2),
+        "indicators": {
+            "rsi": round(rsi, 2),
+            "macd": round(macd, 4),
+            "ema_20": round(ema_20, 2),
+            "atr": round(atr, 2),
+            "adx": round(adx, 2)
+        }
+    }
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) < 2:
+        print(json.dumps({"error": "No symbol provided"}))
+        sys.exit(1)
+    
+    symbol = sys.argv[1]
+    mode = sys.argv[2] if len(sys.argv) > 2 else 'scalping'
+    
+    result = analyze_market(symbol, mode)
+    print(json.dumps(result))
