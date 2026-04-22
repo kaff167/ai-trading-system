@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react'
 import './App.css'
 
-// URL Backend Railway kamu
+// URL Backend Railway
 const API_URL = 'https://ai-trading-system-production-5b49.up.railway.app'
 const WS_URL = API_URL.replace('https://', 'wss://').replace('http://', 'ws://')
 
@@ -10,10 +10,9 @@ function App() {
   const [connected, setConnected] = useState(false)
   const [currentSignal, setCurrentSignal] = useState(null)
   const [tradeLog, setTradeLog] = useState([])
+  const [tradingMode, setTradingMode] = useState('scalping') // 'scalping' atau 'intraday'
 
-  // ==========================================
-  // 1. WebSocket Connection
-  // ==========================================
+  // WebSocket Connection
   useEffect(() => {
     const websocket = new WebSocket(WS_URL)
 
@@ -47,20 +46,18 @@ function App() {
       setConnected(false)
     }
 
-    // Cleanup saat komponen unmount
     return () => {
       websocket.close()
     }
   }, [])
 
-  // ==========================================
-  // 2. Fetch Data (Diperbaiki untuk menghindari error)
-  // ==========================================
+  // Fetch Data dengan mode trading
   useEffect(() => {
     const fetchLatestSignal = async () => {
       try {
-        const response = await fetch(`${API_URL}/api/signal?symbol=XAUUSD-VIP`)
-        if (!response.ok) throw new Error('Network response was not ok');
+        const symbol = tradingMode === 'scalping' ? 'XAUUSD' : 'XAUUSD-VIP'
+        const response = await fetch(`${API_URL}/api/signal?symbol=${symbol}`)
+        if (!response.ok) throw new Error('Network response was not ok')
         const data = await response.json()
         setCurrentSignal(data)
       } catch (error) {
@@ -68,84 +65,146 @@ function App() {
       }
     }
 
-    // Panggil langsung saat pertama load
     fetchLatestSignal()
-
-    // Setup interval untuk refresh setiap 10 detik
     const intervalId = setInterval(fetchLatestSignal, 10000)
-
-    // Cleanup interval saat komponen unmount
     return () => clearInterval(intervalId)
-  }, [])
+  }, [tradingMode])
 
-  // ==========================================
-  // 3. Render UI
-  // ==========================================
+  // Helper function untuk warna
+  const getActionColor = (action) => {
+    if (action === 'BUY') return '#10b981'
+    if (action === 'SELL') return '#ef4444'
+    return '#f59e0b'
+  }
+
+  const getConfidenceColor = (confidence) => {
+    if (confidence >= 0.7) return '#10b981'
+    if (confidence >= 0.5) return '#f59e0b'
+    return '#ef4444'
+  }
+
   return (
-    <div className="App">
+    <div className="app">
+      {/* Header */}
       <header className="header">
-        <h1>🤖 AI Trading Dashboard</h1>
-        <div className={`status ${connected ? 'connected' : 'disconnected'}`}>
-          {connected ? '● Connected' : '○ Disconnected'}
+        <div className="header-content">
+          <div className="logo">
+            <span className="logo-icon">🤖</span>
+            <h1>AI Trading System</h1>
+          </div>
+          <div className={`connection-status ${connected ? 'connected' : 'disconnected'}`}>
+            <span className="status-dot"></span>
+            {connected ? 'Connected' : 'Disconnected'}
+          </div>
         </div>
       </header>
 
-      <main>
+      {/* Trading Mode Toggle */}
+      <div className="mode-selector">
+        <div className={`mode-option ${tradingMode === 'scalping' ? 'active' : ''}`}
+             onClick={() => setTradingMode('scalping')}>
+          <span className="mode-icon">⚡</span>
+          <div>
+            <div className="mode-title">Scalping</div>
+            <div className="mode-desc">Fast trades (1-15 min)</div>
+          </div>
+        </div>
+        <div className={`mode-option ${tradingMode === 'intraday' ? 'active' : ''}`}
+             onClick={() => setTradingMode('intraday')}>
+          <span className="mode-icon">📈</span>
+          <div>
+            <div className="mode-title">Intraday</div>
+            <div className="mode-desc">Long trades (1H-1D)</div>
+          </div>
+        </div>
+      </div>
+
+      <main className="main-content">
         {/* Current Signal Card */}
         {currentSignal && (
           <div className="signal-card">
-            <div className="signal-header">
-              <h2>{currentSignal.symbol} | {currentSignal.action}</h2>
-              <span className={`confidence ${getConfidenceColor(currentSignal.confidence)}`}>
-                Confidence: {(currentSignal.confidence * 100).toFixed(1)}%
-              </span>
-            </div>
-            
-            <div className="signal-details">
-              <div className="detail-item">
-                <span className="label">SL:</span>
-                <span className="value">{currentSignal.sl || 'N/A'}</span>
+            <div className="card-header">
+              <div className="signal-info">
+                <h2 className="symbol">{currentSignal.symbol}</h2>
+                <span 
+                  className="action-badge"
+                  style={{ backgroundColor: getActionColor(currentSignal.action) }}
+                >
+                  {currentSignal.action}
+                </span>
               </div>
-              <div className="detail-item">
-                <span className="label">TP:</span>
-                <span className="value">{currentSignal.tp || 'N/A'}</span>
-              </div>
-              <div className="detail-item">
-                <span className="label">Lot:</span>
-                <span className="value">{currentSignal.lot || '0.01'}</span>
+              <div className="confidence-circle" style={{ 
+                borderColor: getConfidenceColor(currentSignal.confidence) 
+              }}>
+                <span className="confidence-value">
+                  {(currentSignal.confidence * 100).toFixed(0)}%
+                </span>
+                <span className="confidence-label">Confidence</span>
               </div>
             </div>
 
+            {/* Trade Parameters */}
+            <div className="trade-params">
+              <div className="param-box">
+                <span className="param-label">Stop Loss</span>
+                <span className="param-value sl">{currentSignal.sl || 'N/A'}</span>
+              </div>
+              <div className="param-box">
+                <span className="param-label">Take Profit</span>
+                <span className="param-value tp">{currentSignal.tp || 'N/A'}</span>
+              </div>
+              <div className="param-box">
+                <span className="param-label">Lot Size</span>
+                <span className="param-value">{currentSignal.lot || '0.01'}</span>
+              </div>
+            </div>
+
+            {/* AI Reasoning */}
             {currentSignal.reasoning && (
-              <div className="reasoning">
-                <h3>🧠 AI Reasoning:</h3>
-                <ul>
+              <div className="reasoning-section">
+                <h3>🧠 AI Reasoning</h3>
+                <div className="reasoning-list">
                   {currentSignal.reasoning.map((reason, index) => (
-                    <li key={index}>{reason}</li>
+                    <div key={index} className="reasoning-item">
+                      <span className="reasoning-icon">•</span>
+                      <span>{reason}</span>
+                    </div>
                   ))}
-                </ul>
+                </div>
               </div>
             )}
 
+            {/* Technical Indicators */}
             {currentSignal.indicators && (
-              <div className="indicators">
-                <h3>📊 Technical Indicators:</h3>
-                <div className="indicator-grid">
-                  <div className="indicator-item">
-                    <span className="indicator-label">RSI:</span>
-                    <span className="indicator-value">{currentSignal.indicators.rsi}</span>
+              <div className="indicators-section">
+                <h3>📊 Technical Indicators</h3>
+                <div className="indicators-grid">
+                  <div className="indicator-card">
+                    <span className="indicator-name">RSI (14)</span>
+                    <span className={`indicator-value ${
+                      currentSignal.indicators.rsi > 70 ? 'overbought' : 
+                      currentSignal.indicators.rsi < 30 ? 'oversold' : 'neutral'
+                    }`}>
+                      {currentSignal.indicators.rsi?.toFixed(2)}
+                    </span>
                   </div>
-                  <div className="indicator-item">
-                    <span className="indicator-label">MACD:</span>
-                    <span className="indicator-value">{currentSignal.indicators.macd}</span>
+                  <div className="indicator-card">
+                    <span className="indicator-name">MACD</span>
+                    <span className="indicator-value">
+                      {currentSignal.indicators.macd?.toFixed(4)}
+                    </span>
                   </div>
-                  <div className="indicator-item">
-                    <span className="indicator-label">EMA 20:</span>
-                    <span className="indicator-value">{currentSignal.indicators.ema_20}</span>
+                  <div className="indicator-card">
+                    <span className="indicator-name">EMA 20</span>
+                    <span className="indicator-value">
+                      {currentSignal.indicators.ema_20?.toFixed(2)}
+                    </span>
                   </div>
-                  <div className="indicator-item">
-                    <span className="indicator-label">ATR:</span>
-                    <span className="indicator-value">{currentSignal.indicators.atr}</span>
+                  <div className="indicator-card">
+                    <span className="indicator-name">ATR</span>
+                    <span className="indicator-value">
+                      {currentSignal.indicators.atr?.toFixed(2)}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -156,55 +215,68 @@ function App() {
         {/* Stats Cards */}
         <div className="stats-grid">
           <div className="stat-card">
-            <h3>Total Trades</h3>
-            <p className="stat-value">{tradeLog.length}</p>
+            <div className="stat-icon">📊</div>
+            <div className="stat-content">
+              <span className="stat-label">Total Trades</span>
+              <span className="stat-value">{tradeLog.length}</span>
+            </div>
           </div>
           <div className="stat-card">
-            <h3>Last Action</h3>
-            <p className="stat-value">{currentSignal?.action || '-'}</p>
+            <div className="stat-icon">🎯</div>
+            <div className="stat-content">
+              <span className="stat-label">Last Action</span>
+              <span className="stat-value" style={{ color: getActionColor(currentSignal?.action) }}>
+                {currentSignal?.action || '-'}
+              </span>
+            </div>
           </div>
           <div className="stat-card">
-            <h3>Backend Port</h3>
-            <p className="stat-value small">Railway</p>
+            <div className="stat-icon">🌐</div>
+            <div className="stat-content">
+              <span className="stat-label">Backend</span>
+              <span className="stat-value small">Railway</span>
+            </div>
           </div>
         </div>
 
         {/* Trade Log */}
-        <div className="trade-log">
-          <h2>📋 Trade Log (Last 20)</h2>
+        <div className="trade-log-section">
+          <h2>📋 Trade History (Last 20)</h2>
           {tradeLog.length === 0 ? (
-            <div className="no-trades">
+            <div className="empty-state">
+              <div className="empty-icon">⏳</div>
               <p>Belum ada trade... Tunggu EA mengirim sinyal!</p>
             </div>
           ) : (
             <div className="trade-list">
               {tradeLog.map((trade, index) => (
                 <div key={index} className={`trade-item ${trade.action?.toLowerCase()}`}>
-                  <div className="trade-info">
+                  <div className="trade-header">
                     <span className="trade-symbol">{trade.symbol}</span>
                     <span className={`trade-action ${trade.action?.toLowerCase()}`}>
                       {trade.action}
                     </span>
                   </div>
                   <div className="trade-details">
-                    <span>Lot: {trade.lot}</span>
-                    <span>Conf: {(trade.confidence * 100).toFixed(0)}%</span>
+                    <span>Lot: <strong>{trade.lot}</strong></span>
+                    <span>Conf: <strong>{(trade.confidence * 100).toFixed(0)}%</strong></span>
+                    <span>SL: <strong>{trade.sl || 'N/A'}</strong></span>
+                    <span>TP: <strong>{trade.tp || 'N/A'}</strong></span>
                   </div>
+                  <span className="trade-time">#{index + 1}</span>
                 </div>
               ))}
             </div>
           )}
         </div>
       </main>
+
+      {/* Footer */}
+      <footer className="footer">
+        <p>AI Trading System • Powered by Railway & Vercel</p>
+      </footer>
     </div>
   )
-}
-
-// Helper function untuk warna confidence
-function getConfidenceColor(confidence) {
-  if (confidence >= 0.7) return 'high'
-  if (confidence >= 0.5) return 'medium'
-  return 'low'
 }
 
 export default App
