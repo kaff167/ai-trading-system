@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react'
 import './App.css'
 
-// GANTI URL INI dengan URL Railway kamu
+// URL Backend Railway kamu
 const API_URL = 'https://ai-trading-system-production-5b49.up.railway.app'
 const WS_URL = API_URL.replace('https://', 'wss://').replace('http://', 'ws://')
 
@@ -10,26 +10,30 @@ function App() {
   const [connected, setConnected] = useState(false)
   const [currentSignal, setCurrentSignal] = useState(null)
   const [tradeLog, setTradeLog] = useState([])
-  const [ws, setWs] = useState(null)
 
-  // Connect to WebSocket
+  // ==========================================
+  // 1. WebSocket Connection
+  // ==========================================
   useEffect(() => {
     const websocket = new WebSocket(WS_URL)
 
     websocket.onopen = () => {
       console.log('✅ WebSocket Connected')
       setConnected(true)
-      setWs(websocket)
     }
 
     websocket.onmessage = (event) => {
-      const data = JSON.parse(event.data)
-      console.log('📩 Received:', data)
-      
-      if (data.type === 'signal') {
-        setCurrentSignal(data.payload)
-      } else if (data.type === 'trade') {
-        setTradeLog(prev => [data.payload, ...prev].slice(0, 20))
+      try {
+        const data = JSON.parse(event.data)
+        console.log('📩 Received:', data)
+        
+        if (data.type === 'signal') {
+          setCurrentSignal(data.payload)
+        } else if (data.type === 'trade') {
+          setTradeLog(prev => [data.payload, ...prev].slice(0, 20))
+        }
+      } catch (err) {
+        console.error('Error parsing WS message', err)
       }
     }
 
@@ -43,28 +47,40 @@ function App() {
       setConnected(false)
     }
 
+    // Cleanup saat komponen unmount
     return () => {
       websocket.close()
     }
   }, [])
 
-  // Fetch latest signal on mount
+  // ==========================================
+  // 2. Fetch Data (Diperbaiki untuk menghindari error)
+  // ==========================================
   useEffect(() => {
+    const fetchLatestSignal = async () => {
+      try {
+        const response = await fetch(`${API_URL}/api/signal?symbol=XAUUSD-VIP`)
+        if (!response.ok) throw new Error('Network response was not ok');
+        const data = await response.json()
+        setCurrentSignal(data)
+      } catch (error) {
+        console.error('Error fetching signal:', error)
+      }
+    }
+
+    // Panggil langsung saat pertama load
     fetchLatestSignal()
-    const interval = setInterval(fetchLatestSignal, 10000) // Refresh every 10s
-    return () => clearInterval(interval)
+
+    // Setup interval untuk refresh setiap 10 detik
+    const intervalId = setInterval(fetchLatestSignal, 10000)
+
+    // Cleanup interval saat komponen unmount
+    return () => clearInterval(intervalId)
   }, [])
 
-  const fetchLatestSignal = async () => {
-    try {
-      const response = await fetch(`${API_URL}/api/signal?symbol=XAUUSD-VIP`)
-      const data = await response.json()
-      setCurrentSignal(data)
-    } catch (error) {
-      console.error('Error fetching signal:', error)
-    }
-  }
-
+  // ==========================================
+  // 3. Render UI
+  // ==========================================
   return (
     <div className="App">
       <header className="header">
@@ -102,7 +118,7 @@ function App() {
 
             {currentSignal.reasoning && (
               <div className="reasoning">
-                <h3>AI Reasoning:</h3>
+                <h3>🧠 AI Reasoning:</h3>
                 <ul>
                   {currentSignal.reasoning.map((reason, index) => (
                     <li key={index}>{reason}</li>
@@ -113,7 +129,7 @@ function App() {
 
             {currentSignal.indicators && (
               <div className="indicators">
-                <h3>Technical Indicators:</h3>
+                <h3>📊 Technical Indicators:</h3>
                 <div className="indicator-grid">
                   <div className="indicator-item">
                     <span className="indicator-label">RSI:</span>
@@ -148,8 +164,8 @@ function App() {
             <p className="stat-value">{currentSignal?.action || '-'}</p>
           </div>
           <div className="stat-card">
-            <h3>Backend URL</h3>
-            <p className="stat-value small">{API_URL.replace('https://', '')}</p>
+            <h3>Backend Port</h3>
+            <p className="stat-value small">Railway</p>
           </div>
         </div>
 
