@@ -1,24 +1,33 @@
-# Gunakan image Node.js versi 18 (stabil)
+# Gunakan image Node.js versi 18
 FROM node:18-slim
 
-# Install Python3 dan Pip (karena backend kita butuh Python buat AI)
-RUN apt-get update && apt-get install -y python3 python3-pip
+# Install Python3 dan dependencies
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
 
-# Set folder kerja di dalam server Railway
+# Set folder kerja
 WORKDIR /app
 
-# Copy file package.json dan install library Node.js
+# Copy package.json dan install Node.js dependencies
 COPY package*.json ./
 RUN npm install
 
-# Copy file requirements.txt dan install library Python
-COPY requirements.txt ./
-RUN pip3 install -r requirements.txt
+# Buat virtual environment Python
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy semua file kode (server.js, ai_inference.py, dll)
+# Install Python dependencies
+COPY requirements.txt ./
+RUN pip install --upgrade pip && \
+    pip install -r requirements.txt
+
+# Copy semua file kode
 COPY . .
 
-# Buka port 3001
+# Expose port
 EXPOSE 3001
 
 # Jalankan server
