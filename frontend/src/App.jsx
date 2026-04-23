@@ -19,10 +19,9 @@ function App() {
   const [testMode, setTestMode] = useState(false)
   const [tgToken, setTgToken] = useState('')
   const [tgChat, setTgChat] = useState('')
+  const [notif, setNotif] = useState('')
 
-  // ==========================================
-  // FUNGSI UPDATE (Deklarasikan SEBELUM useEffect)
-  // ==========================================
+  // Fungsi Update
   const update = useCallback(async (path, body) => {
     await fetch(`${API_URL}${path}`, { 
       method: 'POST', 
@@ -43,14 +42,12 @@ function App() {
       setProfit(d.dailyProfit)
       setActive(d.isTradingActive)
       setTestMode(d.testMode || false)
-    } catch(e) { 
-      console.error(e) 
+    } catch {
+      console.error('Fetch mode error')
     }
   }, [])
 
-  // ==========================================
-  // WEBSOCKET CONNECTION
-  // ==========================================
+  // WebSocket Connection
   useEffect(() => {
     const ws = new WebSocket(WS_URL)
     
@@ -82,9 +79,7 @@ function App() {
     return () => ws.close()
   }, [fetchMode])
 
-  // ==========================================
-  // SIGNAL FETCH LOOP
-  // ==========================================
+  // Signal Fetch Loop
   useEffect(() => {
     const interval = setInterval(async () => {
       if (!active) return
@@ -92,25 +87,22 @@ function App() {
         const res = await fetch(`${API_URL}/api/signal?symbol=${pair}`)
         const d = await res.json()
         setSignal(d)
-      } catch(e) {
-        console.error('Fetch signal error:', e)
+      } catch {
+        console.error('Fetch signal error')
       }
     }, 10000)
     
     return () => clearInterval(interval)
   }, [pair, active])
 
-  // ==========================================
-  // UI HELPERS
-  // ==========================================
+  // UI Helpers
   const color = (act) => act === 'BUY' ? '#10b981' : act === 'SELL' ? '#ef4444' : '#f59e0b'
   const pct = target ? Math.min((profit / target) * 100, 100) : 0
 
-  // ==========================================
-  // RENDER UI
-  // ==========================================
+  // Render UI
   return (
     <div className="app">
+      {/* Header */}
       <header className="header">
         <div className="logo">
           <span>🤖</span>
@@ -152,7 +144,7 @@ function App() {
       {/* Settings */}
       <div className="grid-3">
         <div className="input-group">
-          <label>Pair</label>
+          <label>PAIR</label>
           <select value={pair} onChange={e => { 
             setPair(e.target.value)
             update('/api/mode', {symbol:e.target.value}) 
@@ -161,7 +153,7 @@ function App() {
           </select>
         </div>
         <div className="input-group">
-          <label>Target ($)</label>
+          <label>TARGET ($)</label>
           <input 
             type="number" 
             value={target} 
@@ -172,7 +164,7 @@ function App() {
           />
         </div>
         <div className="input-group">
-          <label>Max Loss ($)</label>
+          <label>MAX LOSS ($)</label>
           <input 
             type="number" 
             value={maxLoss} 
@@ -225,9 +217,28 @@ function App() {
             onChange={e => setTgChat(e.target.value)} 
           />
         </div>
-        <button className="btn blue" onClick={() => update('/api/mode', {tgToken, tgChat})}>
+        <button 
+          className="btn blue" 
+          onClick={async () => {
+            try {
+              await update('/api/mode', {tgToken, tgChat})
+              setNotif('✅ Telegram berhasil disimpan!')
+              setTimeout(() => setNotif(''), 3000)
+            } catch {
+              setNotif('❌ Gagal menyimpan. Pastikan backend Railway sudah online.')
+              setTimeout(() => setNotif(''), 3000)
+            }
+          }}
+        >
           💾 Save Telegram
         </button>
+        
+        {/* Notification */}
+        {notif && (
+          <div className={`notif ${notif.includes('✅')?'success':'error'}`}>
+            {notif}
+          </div>
+        )}
       </div>
 
       {/* Signal Display */}
@@ -280,6 +291,11 @@ function App() {
           ))
         )}
       </div>
+
+      {/* Footer */}
+      <footer className="footer">
+        <p>AI Trading System • Powered by Railway & Vercel</p>
+      </footer>
     </div>
   )
 }
