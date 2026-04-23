@@ -16,7 +16,7 @@ const wss = new WebSocketServer({ server });
 const API_KEY = process.env.API_KEY || 'dev-key-123';
 
 // ==========================================
-// GLOBAL STATE
+// GLOBAL STATE (Dijadikan 'let' supaya bisa diubah lewat Dashboard)
 // ==========================================
 let globalTradingMode = 'scalping';
 let globalSymbol = 'XAUUSD';
@@ -24,14 +24,15 @@ let dailyTarget = 60;
 let maxDailyLoss = 30;
 let dailyProfit = 0;
 let isTradingActive = true;
-let testMode = false; // Mode testing (Force Signal)
+let testMode = false; 
 
-// Telegram Config
-const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const TG_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+// Telegram Config (Bisa diisi dari Railway Variables ATAU Dashboard)
+let TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+let TG_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
 
+// Fungsi Kirim Telegram
 async function sendTelegram(text) {
-  if (!TG_TOKEN || !TG_CHAT_ID) return;
+  if (!TG_TOKEN || !TG_CHAT_ID) return; // Jangan kirim kalau belum disetting
   try {
     const url = `https://api.telegram.org/bot${TG_TOKEN}/sendMessage`;
     await fetch(url, {
@@ -53,29 +54,50 @@ app.use((req, res, next) => {
   else res.status(401).json({ error: 'Invalid API Key' });
 });
 
+// GET Mode
 app.get('/api/mode', (req, res) => {
-  res.json({ mode: globalTradingMode, symbol: globalSymbol, dailyTarget, maxDailyLoss, dailyProfit, isTradingActive, testMode });
+  res.json({ 
+    mode: globalTradingMode, 
+    symbol: globalSymbol, 
+    dailyTarget, 
+    maxDailyLoss, 
+    dailyProfit, 
+    isTradingActive, 
+    testMode 
+  });
 });
 
+// POST Mode (INI YANG DIPERBAIKI BIAR BISA SAVE TELEGRAM)
 app.post('/api/mode', (req, res) => {
-  const { mode, symbol, dailyTarget: dt, maxDailyLoss: mdl } = req.body;
+  const { mode, symbol, dailyTarget: dt, maxDailyLoss: mdl, tgToken, tgChat } = req.body;
+  
   if (mode) globalTradingMode = mode;
   if (symbol) globalSymbol = symbol;
   if (dt) dailyTarget = parseFloat(dt);
   if (mdl) maxDailyLoss = parseFloat(mdl);
   
+  // Simpan Telegram Credentials dari Dashboard
+  if (tgToken) TG_TOKEN = tgToken;
+  if (tgChat) TG_CHAT_ID = tgChat;
+
   const payload = { mode: globalTradingMode, symbol: globalSymbol, dailyTarget, maxDailyLoss, isTradingActive };
+  
+  // Broadcast update
   wss.clients.forEach(c => c.readyState === 1 && c.send(JSON.stringify({ type: 'mode_update', payload })));
-  res.json({ status: 'ok', payload });
+  
+  res.json({ status: 'ok', payload, message: 'Settings saved' });
 });
 
+// Test Mode Toggle
 app.post('/api/test-mode', (req, res) => {
   const { enabled } = req.body;
   testMode = !!enabled;
   process.env.TEST_MODE = testMode ? 'true' : 'false';
+  console.log(`🧪 Test Mode set to: ${testMode}`);
   res.json({ status: 'ok', testMode });
 });
 
+// Get Signal
 app.get('/api/signal', (req, res) => {
   const symbol = req.query.symbol || globalSymbol;
   console.log(`📡 Signal: ${symbol} | Mode: ${globalTradingMode} | Test: ${testMode}`);
@@ -100,6 +122,7 @@ app.get('/api/signal', (req, res) => {
   });
 });
 
+// Trade Log
 app.post('/api/trade-log', (req, res) => {
   const trade = req.body;
   console.log('📊 Trade Log:', trade);
@@ -110,7 +133,7 @@ app.post('/api/trade-log', (req, res) => {
     if (dailyProfit <= -maxDailyLoss) { isTradingActive = false; console.log('🛑 Max Loss Hit!'); }
   }
   
-  // Send Telegram Alert
+  // Send Telegram Alert (Sekarang pasti jalan kalau Token/ID sudah di-save)
   if (trade.action !== 'HOLD') {
     sendTelegram(`🚀 *NEW SIGNAL*\n💰 Pair: ${trade.symbol}\n📊 Action: *${trade.action}*\n📈 Lot: ${trade.lot}\n💵 Profit: $${trade.profit || 0}`);
   }
