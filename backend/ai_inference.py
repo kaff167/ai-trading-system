@@ -6,16 +6,33 @@ import numpy as np
 import ta
 import requests
 from datetime import datetime, timedelta
+import os
 
 def get_market_data(symbol):
     """
-    Ambil data market dari API (gunakan Alpha Vantage, Yahoo Finance, atau mock data)
+    Ambil data market - bisa pakai mock data atau API real
     """
     try:
-        # Mock data untuk demo - ganti dengan API real seperti Alpha Vantage/Yahoo Finance
-        # Contoh: https://www.alphavantage.co/query?function=FX_INTRADAY...
+        # MODE TESTING: Force data untuk testing
+        test_mode = os.environ.get('TEST_MODE', 'false').lower() == 'true'
         
-        # Generate mock OHLCV data
+        if test_mode:
+            # Generate data yang pasti kasih signal BUY untuk testing
+            dates = pd.date_range(end=datetime.now(), periods=100, freq='15min')
+            base_price = 1850 if 'XAU' in symbol else 1.0800
+            
+            # Trend naik kuat untuk testing
+            data = pd.DataFrame({
+                'timestamp': dates,
+                'open': base_price + np.linspace(0, 10, 100) + np.random.randn(100) * 0.5,
+                'high': base_price + np.linspace(0, 12, 100) + np.random.randn(100) * 0.5,
+                'low': base_price + np.linspace(0, 8, 100) + np.random.randn(100) * 0.5,
+                'close': base_price + np.linspace(0, 10, 100) + np.random.randn(100) * 0.5,
+                'volume': np.random.randint(100, 1000, 100)
+            })
+            return data
+        
+        # PRODUCTION: Pakai mock data normal
         dates = pd.date_range(end=datetime.now(), periods=100, freq='15min')
         base_price = 1850 if 'XAU' in symbol else 1.0800
         
@@ -30,69 +47,102 @@ def get_market_data(symbol):
         
         return data
     except Exception as e:
-        print(f"Error fetching data: {e}", file=sys.stderr)
+        print(f"Error fetching  {e}", file=sys.stderr)
         return None
 
 def calculate_indicators(df):
     """
-    Hitung technical indicators
+    Hitung SEMUA technical indicators
     """
-    # RSI
+    # === INDIKATOR TREND ===
     df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
+    df['stoch_k'] = ta.momentum.StochasticOscillator(df['high'], df['low'], df['close'], window=14).stoch()
+    df['stoch_d'] = ta.momentum.StochasticOscillator(df['high'], df['low'], df['close'], window=14, smooth_window=3).stoch()
     
     # MACD
     df['macd'] = ta.trend.MACD(df['close']).macd()
     df['macd_signal'] = ta.trend.MACD(df['close']).macd_signal()
+    df['macd_diff'] = df['macd'] - df['macd_signal']
     
     # EMA
+    df['ema_9'] = ta.trend.EMAIndicator(df['close'], window=9).ema_indicator()
     df['ema_20'] = ta.trend.EMAIndicator(df['close'], window=20).ema_indicator()
     df['ema_50'] = ta.trend.EMAIndicator(df['close'], window=50).ema_indicator()
     
+    # === INDIKATOR VOLATILITAS ===
     # Bollinger Bands
     bb = ta.volatility.BollingerBands(df['close'], window=20)
     df['bb_upper'] = bb.bollinger_hband()
     df['bb_lower'] = bb.bollinger_lband()
     df['bb_middle'] = bb.bollinger_mavg()
+    df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_middle']
     
-    # ATR (untuk calculate SL/TP)
+    # ATR
     df['atr'] = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range()
     
-    # ADX
+    # === INDIKATOR VOLUME ===
+    df['obv'] = ta.volume.OnBalanceVolumeIndicator(df['close'], df['volume']).on_balance_volume()
+    df['volume_sma'] = df['volume'].rolling(window=20).mean()
+    
+    # === INDIKATOR TREND STRENGTH ===
     df['adx'] = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14).adx()
+    df['cci'] = ta.trend.CCIIndicator(df['high'], df['low'], df['close'], window=20).cci()
     
     return df
 
 def calculate_sl_tp(df, action, mode='scalping'):
     """
-    Hitung Stop Loss dan Take Profit berdasarkan ATR dan mode trading
+    Hitung Stop Loss dan Take Profit yang LEBIH CERDAS
     """
     current_price = df['close'].iloc[-1]
     atr = df['atr'].iloc[-1]
+    bb_upper = df['bb_upper'].iloc[-1]
+    bb_lower = df['bb_lower'].iloc[-1]
     
+    # Tentukan multiplier berdasarkan mode
     if mode == 'scalping':
-        # Scalping: SL/TP lebih ketat
         sl_multiplier = 1.5
         tp_multiplier = 2.5
+        min_rr = 1.5  # Minimal risk-reward ratio
     else:  # intraday
-        # Intraday: SL/TP lebih longgar
         sl_multiplier = 2.5
         tp_multiplier = 4.0
+        min_rr = 2.0
     
     if action == 'BUY':
-        sl = current_price - (atr * sl_multiplier)
-        tp = current_price + (atr * tp_multiplier)
+        # SL di bawah support (BB lower atau ATR)
+        sl_distance = max(atr * sl_multiplier, current_price - bb_lower)
+        sl = current_price - sl_distance
+        
+        # TP di atas resistance (BB upper atau ATR)
+        tp_distance = max(atr * tp_multiplier, bb_upper - current_price)
+        
+        # Pastikan risk-reward ratio minimal terpenuhi
+        risk = current_price - sl
+        min_tp = current_price + (risk * min_rr)
+        tp = max(current_price + tp_distance, min_tp)
+        
     elif action == 'SELL':
-        sl = current_price + (atr * sl_multiplier)
-        tp = current_price - (atr * tp_multiplier)
+        # SL di atas resistance
+        sl_distance = max(atr * sl_multiplier, bb_upper - current_price)
+        sl = current_price + sl_distance
+        
+        # TP di bawah support
+        tp_distance = max(atr * tp_multiplier, current_price - bb_lower)
+        
+        # Pastikan risk-reward ratio
+        risk = sl - current_price
+        min_tp = current_price - (risk * min_rr)
+        tp = min(current_price - tp_distance, min_tp)
     else:  # HOLD
         sl = 0
         tp = 0
     
     return round(sl, 2), round(tp, 2)
 
-def analyze_market(symbol, mode):
+def analyze_market(symbol, mode='scalping'):
     """
-    Analisis market dan generate signal
+    Analisis market dengan SEMUA indikator
     """
     df = get_market_data(symbol)
     
@@ -113,95 +163,131 @@ def analyze_market(symbol, mode):
     
     # Get latest values
     latest = df.iloc[-1]
-    rsi = latest['rsi']
-    macd = latest['macd']
-    macd_signal = latest['macd_signal']
-    ema_20 = latest['ema_20']
-    ema_50 = latest['ema_50']
-    bb_upper = latest['bb_upper']
-    bb_lower = latest['bb_lower']
-    atr = latest['atr']
-    adx = latest['adx']
     current_price = latest['close']
     
+    # === ANALISIS MULTI-TIMEFRAME ===
     reasoning = []
-    action = "HOLD"
-    confidence = 0.5
+    signals = []
+    confidence_score = 0
     
-    # RSI Analysis
+    # 1. RSI Analysis
+    rsi = latest['rsi']
     if rsi < 30:
         reasoning.append(f"RSI oversold: {rsi:.1f}")
-        rsi_signal = "BUY"
+        signals.append(1)  # BUY signal
+        confidence_score += 1
     elif rsi > 70:
         reasoning.append(f"RSI overbought: {rsi:.1f}")
-        rsi_signal = "SELL"
+        signals.append(-1)  # SELL signal
+        confidence_score += 1
     else:
         reasoning.append(f"RSI neutral: {rsi:.1f}")
-        rsi_signal = "HOLD"
+        signals.append(0)
     
-    # MACD Analysis
-    if macd > macd_signal:
+    # 2. Stochastic Analysis
+    stoch_k = latest['stoch_k']
+    stoch_d = latest['stoch_d']
+    if stoch_k < 20 and stoch_k > stoch_d:
+        reasoning.append(f"Stochastic oversold & crossing up")
+        signals.append(1)
+        confidence_score += 1
+    elif stoch_k > 80 and stoch_k < stoch_d:
+        reasoning.append(f"Stochastic overbought & crossing down")
+        signals.append(-1)
+        confidence_score += 1
+    else:
+        reasoning.append(f"Stochastic neutral: K={stoch_k:.1f}, D={stoch_d:.1f}")
+        signals.append(0)
+    
+    # 3. MACD Analysis
+    macd = latest['macd']
+    macd_signal = latest['macd_signal']
+    macd_diff = latest['macd_diff']
+    if macd > macd_signal and macd_diff > 0:
         reasoning.append("MACD bullish crossover")
-        macd_signal_action = "BUY"
-    elif macd < macd_signal:
+        signals.append(1)
+        confidence_score += 1
+    elif macd < macd_signal and macd_diff < 0:
         reasoning.append("MACD bearish crossover")
-        macd_signal_action = "SELL"
+        signals.append(-1)
+        confidence_score += 1
     else:
-        reasoning.append("MACD no signal")
-        macd_signal_action = "HOLD"
+        reasoning.append("MACD no clear signal")
+        signals.append(0)
     
-    # EMA Analysis
-    if ema_20 > ema_50:
-        reasoning.append("EMA uptrend")
-        ema_signal = "BUY"
-    elif ema_20 < ema_50:
-        reasoning.append("EMA downtrend")
-        ema_signal = "SELL"
+    # 4. EMA Trend
+    ema_9 = latest['ema_9']
+    ema_20 = latest['ema_20']
+    ema_50 = latest['ema_50']
+    if ema_9 > ema_20 > ema_50:
+        reasoning.append("Strong uptrend (EMA alignment)")
+        signals.append(1)
+        confidence_score += 1.5
+    elif ema_9 < ema_20 < ema_50:
+        reasoning.append("Strong downtrend (EMA alignment)")
+        signals.append(-1)
+        confidence_score += 1.5
     else:
-        reasoning.append("EMA sideways")
-        ema_signal = "HOLD"
+        reasoning.append("EMA mixed/no clear trend")
+        signals.append(0)
     
-    # Bollinger Bands Analysis
+    # 5. Bollinger Bands
+    bb_upper = latest['bb_upper']
+    bb_lower = latest['bb_lower']
     if current_price < bb_lower:
-        reasoning.append("Price below BB lower band")
-        bb_signal = "BUY"
+        reasoning.append("Price below BB lower (oversold)")
+        signals.append(1)
+        confidence_score += 1
     elif current_price > bb_upper:
-        reasoning.append("Price above BB upper band")
-        bb_signal = "SELL"
+        reasoning.append("Price above BB upper (overbought)")
+        signals.append(-1)
+        confidence_score += 1
     else:
-        reasoning.append("BB neutral")
-        bb_signal = "HOLD"
+        reasoning.append("Price within BB range")
+        signals.append(0)
     
-    # ADX - Trend Strength
+    # 6. ADX - Trend Strength
+    adx = latest['adx']
     if adx > 25:
         reasoning.append(f"Strong trend (ADX: {adx:.1f})")
+        confidence_score += 0.5
     else:
         reasoning.append(f"Weak trend (ADX: {adx:.1f})")
     
-    # Combine signals
-    signals = [rsi_signal, macd_signal_action, ema_signal, bb_signal]
-    buy_count = signals.count("BUY")
-    sell_count = signals.count("SELL")
+    # 7. CCI
+    cci = latest['cci']
+    if cci < -100:
+        reasoning.append(f"CCI oversold: {cci:.1f}")
+        signals.append(1)
+    elif cci > 100:
+        reasoning.append(f"CCI overbought: {cci:.1f}")
+        signals.append(-1)
     
-    # Determine action
-    if buy_count >= 3:
+    # === KEPUTUSAN AKHIR ===
+    total_score = sum(signals)
+    max_score = len(signals) * 1.5  # Maximum possible score
+    
+    if total_score >= 3:
         action = "BUY"
-        confidence = 0.5 + (buy_count * 0.1)
-    elif sell_count >= 3:
+        confidence = 0.5 + (total_score / max_score) * 0.5
+    elif total_score <= -3:
         action = "SELL"
-        confidence = 0.5 + (sell_count * 0.1)
+        confidence = 0.5 + (abs(total_score) / max_score) * 0.5
     else:
         action = "HOLD"
         confidence = 0.5
     
-    # Cap confidence at 0.95
+    # Cap confidence
     confidence = min(confidence, 0.95)
     
     # Calculate SL/TP
     sl, tp = calculate_sl_tp(df, action, mode)
     
-    # Determine lot size based on mode
-    lot = 0.01 if mode == 'scalping' else 0.02
+    # Determine lot size
+    if mode == 'scalping':
+        lot = 0.01 if confidence < 0.7 else 0.02
+    else:
+        lot = 0.02 if confidence < 0.7 else 0.03
     
     return {
         "symbol": symbol,
@@ -214,10 +300,14 @@ def analyze_market(symbol, mode):
         "current_price": round(current_price, 2),
         "indicators": {
             "rsi": round(rsi, 2),
+            "stoch_k": round(stoch_k, 2),
+            "stoch_d": round(stoch_d, 2),
             "macd": round(macd, 4),
             "ema_20": round(ema_20, 2),
-            "atr": round(atr, 2),
-            "adx": round(adx, 2)
+            "atr": round(latest['atr'], 2),
+            "adx": round(adx, 2),
+            "cci": round(cci, 2),
+            "bb_width": round(latest['bb_width'], 4)
         }
     }
 
