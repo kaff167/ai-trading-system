@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 import ta
 import os
-from datetime import datetime  # <-- TAMBAHKAN INI!
+from datetime import datetime
 
 def get_market_data(symbol):
     """Ambil data market"""
@@ -124,13 +124,34 @@ def analyze_market(symbol, mode='scalping'):
         action = "HOLD"
         confidence = 0.5
     
-    # Hitung SL/TP berdasarkan ATR
+    # ==========================================
+    # HITUNG SL/TP - DIPERBAIKI!
+    # ==========================================
+    atr_multiplier_sl = 2.0  # SL lebih longgar
+    atr_multiplier_tp = 3.0  # TP lebih realistis
+    min_stop_distance = 50  # Minimal jarak SL/TP untuk XAUUSD (points)
+    
     if action == "BUY":
-        sl = round(price - (atr * 1.5), 2)
-        tp = round(price + (atr * 2.5), 2)
+        sl_distance = max(atr * atr_multiplier_sl, min_stop_distance)
+        tp_distance = max(atr * atr_multiplier_tp, min_stop_distance * 1.5)
+        
+        sl = round(price - sl_distance, 2)
+        tp = round(price + tp_distance, 2)
+        
+        # Validasi: SL harus di bawah harga entry
+        if sl >= price:
+            sl = round(price - min_stop_distance, 2)
+        
     elif action == "SELL":
-        sl = round(price + (atr * 1.5), 2)
-        tp = round(price - (atr * 2.5), 2)
+        sl_distance = max(atr * atr_multiplier_sl, min_stop_distance)
+        tp_distance = max(atr * atr_multiplier_tp, min_stop_distance * 1.5)
+        
+        sl = round(price + sl_distance, 2)
+        tp = round(price - tp_distance, 2)
+        
+        # Validasi: SL harus di atas harga entry
+        if sl <= price:
+            sl = round(price + min_stop_distance, 2)
     else:
         sl = 0
         tp = 0
