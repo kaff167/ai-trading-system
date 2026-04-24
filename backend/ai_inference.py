@@ -13,7 +13,6 @@ def get_market_data(symbol):
         test_mode = os.environ.get('TEST_MODE', 'false').lower() == 'true'
         
         if test_mode:
-            # FORCE DATA untuk testing - Trend naik kuat
             dates = pd.date_range(end=datetime.now(), periods=100, freq='5min')
             base_price = 1850 if 'XAU' in symbol else 1.0800
             
@@ -27,7 +26,6 @@ def get_market_data(symbol):
             })
             return data
         
-        # Data normal
         dates = pd.date_range(end=datetime.now(), periods=100, freq='5min')
         base_price = 1850 if 'XAU' in symbol else 1.0800
         
@@ -45,10 +43,6 @@ def get_market_data(symbol):
         return None
 
 def analyze_market(symbol, mode='scalping'):
-    """
-    SCALPING: Hanya pakai 3 indikator utama (RSI + MACD + EMA)
-    INTRADAY: Tambah konfirmasi tambahan
-    """
     df = get_market_data(symbol)
     
     if df is None or df.empty:
@@ -77,10 +71,10 @@ def analyze_market(symbol, mode='scalping'):
     # 1. RSI Check
     if rsi < 35:
         reasoning.append(f"RSI Oversold: {rsi:.1f}")
-        signals.append(1)  # BUY
+        signals.append(1)
     elif rsi > 65:
         reasoning.append(f"RSI Overbought: {rsi:.1f}")
-        signals.append(-1)  # SELL
+        signals.append(-1)
     else:
         reasoning.append(f"RSI Neutral: {rsi:.1f}")
         signals.append(0)
@@ -109,9 +103,6 @@ def analyze_market(symbol, mode='scalping'):
     
     # KEPUTUSAN
     total = sum(signals)
-    
-    # SCALPING: Lebih agresif (cukup 2 dari 3)
-    # INTRADAY: Lebih ketat (harus 3 dari 3)
     threshold = 2 if mode == 'scalping' else 3
     
     if total >= threshold:
@@ -125,33 +116,23 @@ def analyze_market(symbol, mode='scalping'):
         confidence = 0.5
     
     # ==========================================
-    # HITUNG SL/TP - DIPERBAIKI!
+    # HITUNG SL/TP - FINAL FIX!
     # ==========================================
-    atr_multiplier_sl = 2.0  # SL lebih longgar
-    atr_multiplier_tp = 3.0  # TP lebih realistis
-    min_stop_distance = 50  # Minimal jarak SL/TP untuk XAUUSD (points)
+    # Untuk XAUUSD, minimal SL/TP adalah 100 points (10 pips)
+    # Untuk forex, minimal 50 points (5 pips)
+    
+    is_gold = 'XAU' in symbol or 'GOLD' in symbol.upper()
+    min_distance = 100 if is_gold else 50  # Minimal jarak SL/TP
     
     if action == "BUY":
-        sl_distance = max(atr * atr_multiplier_sl, min_stop_distance)
-        tp_distance = max(atr * atr_multiplier_tp, min_stop_distance * 1.5)
-        
-        sl = round(price - sl_distance, 2)
-        tp = round(price + tp_distance, 2)
-        
-        # Validasi: SL harus di bawah harga entry
-        if sl >= price:
-            sl = round(price - min_stop_distance, 2)
+        # SL di bawah harga, TP di atas
+        sl = round(price - max(atr * 2, min_distance), 2)
+        tp = round(price + max(atr * 3, min_distance * 1.5), 2)
         
     elif action == "SELL":
-        sl_distance = max(atr * atr_multiplier_sl, min_stop_distance)
-        tp_distance = max(atr * atr_multiplier_tp, min_stop_distance * 1.5)
-        
-        sl = round(price + sl_distance, 2)
-        tp = round(price - tp_distance, 2)
-        
-        # Validasi: SL harus di atas harga entry
-        if sl <= price:
-            sl = round(price + min_stop_distance, 2)
+        # SL di atas harga, TP di bawah
+        sl = round(price + max(atr * 2, min_distance), 2)
+        tp = round(price - max(atr * 3, min_distance * 1.5), 2)
     else:
         sl = 0
         tp = 0
