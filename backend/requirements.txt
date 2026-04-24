@@ -2,3 +2,12 @@ pandas
 numpy
 ta
 requests
+fastapi
+uvicorn
+pandas
+numpy
+ta
+python-dotenv
+requests
+pytz
+yfinance

@@ -5,50 +5,79 @@ import pandas as pd
 import numpy as np
 import ta
 import os
-from datetime import datetime
+import yfinance as yf
+from datetime import datetime, timedelta
 
 def get_market_data(symbol):
-    """Ambil data market"""
+    """
+    Ambil data REAL dari Yahoo Finance
+    """
     try:
-        test_mode = os.environ.get('TEST_MODE', 'false').lower() == 'true'
+        # Mapping Symbol MT5 ke Yahoo Finance
+        # XAUUSD -> GC=F (Gold Futures)
+        # EURUSD -> EURUSD=X
+        if 'XAU' in symbol.upper() or 'GOLD' in symbol.upper():
+            yf_symbol = "GC=F"
+        elif 'EURUSD' in symbol.upper():
+            yf_symbol = "EURUSD=X"
+        elif 'GBPUSD' in symbol.upper():
+            yf_symbol = "GBPUSD=X"
+        elif 'USDJPY' in symbol.upper():
+            yf_symbol = "USDJPY=X"
+        else:
+            yf_symbol = "GC=F" # Default Gold
+
+        # Download data 5 hari terakhir dengan interval 5 menit (Cukup untuk hitung indikator)
+        df = yf.download(yf_symbol, period="5d", interval="5m", progress=False)
         
-        if test_mode:
-            dates = pd.date_range(end=datetime.now(), periods=100, freq='5min')
-            base_price = 1850 if 'XAU' in symbol else 1.0800
-            
-            data = pd.DataFrame({
-                'timestamp': dates,
-                'open': base_price + np.linspace(0, 5, 100),
-                'high': base_price + np.linspace(0, 6, 100),
-                'low': base_price + np.linspace(0, 4, 100),
-                'close': base_price + np.linspace(0, 5, 100),
-                'volume': np.random.randint(100, 1000, 100)
-            })
-            return data
+        if df.empty:
+            print(f"⚠️ Failed to download data for {symbol}", file=sys.stderr)
+            return None
         
-        dates = pd.date_range(end=datetime.now(), periods=100, freq='5min')
-        base_price = 1850 if 'XAU' in symbol else 1.0800
+        # Reset index agar timestamp jadi kolom biasa
+        df = df.reset_index()
         
-        data = pd.DataFrame({
-            'timestamp': dates,
-            'open': base_price + np.random.randn(100) * 2,
-            'high': base_price + np.random.randn(100) * 2.5,
-            'low': base_price + np.random.randn(100) * 2.5,
-            'close': base_price + np.random.randn(100) * 2,
-            'volume': np.random.randint(100, 1000, 100)
+        # Bersihkan nama kolom (kadang yfinance bikin kolom jadi tuple)
+        df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
+        
+        # Rename kolom agar sesuai standar
+        df = df.rename(columns={
+            'Datetime': 'timestamp',
+            'Open': 'open',
+            'High': 'high',
+            'Low': 'low',
+            'Close': 'close',
+            'Volume': 'volume'
         })
-        return data
+        
+        # Ambil kolom yang dibutuhkan saja
+        return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        print(f"❌ Error fetching market data: {e}", file=sys.stderr)
         return None
 
 def analyze_market(symbol, mode='scalping'):
+    """
+    Analisis Market dengan Data Real
+    """
     df = get_market_data(symbol)
     
+    # Handle error kalau data gagal diambil
     if df is None or df.empty:
-        return {"symbol": symbol, "action": "HOLD", "confidence": 0.5, "sl": 0, "tp": 0, "lot": 0.01, "reasoning": ["Error data"], "current_price": 0, "indicators": {}}
+        return {
+            "symbol": symbol, 
+            "action": "HOLD", 
+            "confidence": 0.5, 
+            "sl": 0, 
+            "tp": 0, 
+            "lot": 0.01, 
+            "reasoning": ["Error: Failed to fetch real data"], 
+            "current_price": 0, 
+            "indicators": {}
+        }
     
-    # Hitung indikator
+    # Hitung Indikator
     df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
     df['macd'] = ta.trend.MACD(df['close']).macd()
     df['macd_signal'] = ta.trend.MACD(df['close']).macd_signal()
@@ -56,8 +85,11 @@ def analyze_market(symbol, mode='scalping'):
     df['ema_slow'] = ta.trend.EMAIndicator(df['close'], window=21).ema_indicator()
     df['atr'] = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range()
     
+    # Ambil data candle terakhir
     latest = df.iloc[-1]
     price = latest['close']
+    
+    # Ambil nilai indikator terakhir
     rsi = latest['rsi']
     macd = latest['macd']
     macd_sig = latest['macd_signal']
@@ -68,13 +100,15 @@ def analyze_market(symbol, mode='scalping'):
     reasoning = []
     signals = []
     
+    # --- LOGIKA SCALPING SEDERHANA (3 INDIKATOR) ---
+    
     # 1. RSI Check
     if rsi < 35:
         reasoning.append(f"RSI Oversold: {rsi:.1f}")
-        signals.append(1)
+        signals.append(1)  # BUY signal
     elif rsi > 65:
         reasoning.append(f"RSI Overbought: {rsi:.1f}")
-        signals.append(-1)
+        signals.append(-1) # SELL signal
     else:
         reasoning.append(f"RSI Neutral: {rsi:.1f}")
         signals.append(0)
@@ -90,7 +124,7 @@ def analyze_market(symbol, mode='scalping'):
         reasoning.append("MACD Flat")
         signals.append(0)
     
-    # 3. EMA Crossover
+    # 3. EMA Trend
     if ema_fast > ema_slow:
         reasoning.append("EMA Uptrend")
         signals.append(1)
@@ -101,38 +135,38 @@ def analyze_market(symbol, mode='scalping'):
         reasoning.append("EMA Flat")
         signals.append(0)
     
-    # KEPUTUSAN
-    total = sum(signals)
-    threshold = 2 if mode == 'scalping' else 3
+    # --- KEPUTUSAN ---
+    total_score = sum(signals)
+    threshold = 2 if mode == 'scalping' else 3  # Scalping lebih agresif
     
-    if total >= threshold:
+    if total_score >= threshold:
         action = "BUY"
-        confidence = 0.7 + (total * 0.1)
-    elif total <= -threshold:
+        confidence = 0.7 + (total_score * 0.1)
+    elif total_score <= -threshold:
         action = "SELL"
-        confidence = 0.7 + (abs(total) * 0.1)
+        confidence = 0.7 + (abs(total_score) * 0.1)
     else:
         action = "HOLD"
         confidence = 0.5
     
-    # ==========================================
-    # HITUNG SL/TP - FINAL FIX!
-    # ==========================================
-    # Untuk XAUUSD, minimal SL/TP adalah 100 points (10 pips)
-    # Untuk forex, minimal 50 points (5 pips)
+    confidence = min(confidence, 0.95)
     
-    is_gold = 'XAU' in symbol or 'GOLD' in symbol.upper()
-    min_distance = 100 if is_gold else 50  # Minimal jarak SL/TP
+    # --- HITUNG SL/TP DENGAN HARGA REAL ---
+    # Untuk XAUUSD, ATR biasanya sekitar 2-5 poin. 
+    # Kita kalikan agar aman dari "Invalid Stops"
+    
+    is_gold = 'XAU' in symbol.upper()
+    
+    # Kalikan ATR agar jarak cukup jauh (broker butuh minimal distance)
+    sl_distance = max(atr * 2.0, 20.0 if is_gold else 0.0020) # Min 20 poin untuk Gold
+    tp_distance = max(atr * 3.0, 30.0 if is_gold else 0.0030) # Min 30 poin untuk Gold
     
     if action == "BUY":
-        # SL di bawah harga, TP di atas
-        sl = round(price - max(atr * 2, min_distance), 2)
-        tp = round(price + max(atr * 3, min_distance * 1.5), 2)
-        
+        sl = round(price - sl_distance, 2)
+        tp = round(price + tp_distance, 2)
     elif action == "SELL":
-        # SL di atas harga, TP di bawah
-        sl = round(price + max(atr * 2, min_distance), 2)
-        tp = round(price - max(atr * 3, min_distance * 1.5), 2)
+        sl = round(price + sl_distance, 2)
+        tp = round(price - tp_distance, 2)
     else:
         sl = 0
         tp = 0
@@ -140,10 +174,10 @@ def analyze_market(symbol, mode='scalping'):
     return {
         "symbol": symbol,
         "action": action,
-        "confidence": round(min(confidence, 0.95), 2),
+        "confidence": round(confidence, 2),
         "sl": sl,
         "tp": tp,
-        "lot": 0.01 if mode == 'scalping' else 0.02,
+        "lot": 0.01,
         "reasoning": reasoning,
         "current_price": round(price, 2),
         "indicators": {
@@ -156,7 +190,7 @@ def analyze_market(symbol, mode='scalping'):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print(json.dumps({"error": "No symbol"}))
+        print(json.dumps({"error": "No symbol provided"}))
         sys.exit(1)
     
     symbol = sys.argv[1]
