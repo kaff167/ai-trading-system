@@ -104,9 +104,10 @@ app.prepare().then(() => {
 
       const bridgeOnline = !!room.bridgeSocketId;
 
-      // Start the simulator if no real bridge is present and this is the demo
-      // token (or SIMULATE forces it on for any token).
-      if (!bridgeOnline && SIMULATE && (token === DEMO_TOKEN || true)) {
+      // Start the built-in simulator only for the demo token, and only when no
+      // real bridge is connected. Real tokens that are offline stay empty so
+      // the user isn't shown fake data while waiting for their bridge.
+      if (!bridgeOnline && SIMULATE && token === DEMO_TOKEN) {
         if (!room.simulator) {
           room.simulator = new BotSimulator(
             (event, payload) => {

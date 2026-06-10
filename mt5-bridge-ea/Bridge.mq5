@@ -56,6 +56,7 @@ int      g_totalTrades  = 0;
 int      g_wins         = 0;
 int      g_losses       = 0;
 double   g_sessionProfit= 0.0;
+long     g_tradeSeq     = 0;            // monotonic id for emitted trade records
 int      g_fastHandle   = INVALID_HANDLE;
 int      g_slowHandle   = INVALID_HANDLE;
 
@@ -202,12 +203,21 @@ void RunEngine()
 
    // Countdown elapsed — evaluate the signal and (maybe) open a trade.
    int signal = Signal();
+   if(signal < 0)
+     {
+      // No reliable signal (indicator data not ready) — skip this cycle.
+      PublishLog("info", "Signal unclear — skipping cycle");
+      g_countdown = InpIntervalSec;
+      return;
+     }
    if(signal == ORDER_TYPE_BUY)
       PublishLog("info", "MACD crossover detected");
    OpenPosition(signal);
    g_countdown = InpIntervalSec;
   }
 
+// Returns ORDER_TYPE_BUY / ORDER_TYPE_SELL, or -1 when indicator data is not
+// yet available (caller skips the cycle rather than guessing a direction).
 int Signal()
   {
    double fast[], slow[];
@@ -215,7 +225,7 @@ int Signal()
    ArraySetAsSeries(slow, true);
    if(CopyBuffer(g_fastHandle, 0, 0, 2, fast) < 2 ||
       CopyBuffer(g_slowHandle, 0, 0, 2, slow) < 2)
-      return ORDER_TYPE_BUY;
+      return -1;
    return (fast[0] >= slow[0]) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
   }
 
@@ -225,7 +235,8 @@ void OpenPosition(const int type)
                   ? SymbolInfoDouble(InpSymbol, SYMBOL_ASK)
                   : SymbolInfoDouble(InpSymbol, SYMBOL_BID);
    string side = (type == ORDER_TYPE_BUY) ? "BUY" : "SELL";
-   PublishLog("buy", "✓✓ " + side + " " + InpSymbol + " @ $" + DoubleToString(price, _Digits));
+   string sideLevel = (type == ORDER_TYPE_BUY) ? "buy" : "sell";
+   PublishLog(sideLevel, "✓✓ " + side + " " + InpSymbol + " @ $" + DoubleToString(price, _Digits));
 
    bool ok = true;
    if(!InpDryRun)
@@ -280,7 +291,8 @@ void ClosePosition()
 
    // Emit a trade record for the Live Trade Log.
    string dir = (g_openType == ORDER_TYPE_BUY) ? "buy" : "sell";
-   Publish("{" + J("type","trade") + "," + Ji("ticket", (long)TimeCurrent()) + "," +
+   g_tradeSeq++;
+   Publish("{" + J("type","trade") + "," + Ji("ticket", g_tradeSeq) + "," +
            J("symbol",InpSymbol) + "," + J("displaySymbol",DisplaySymbol(InpSymbol)) + "," +
            J("direction",dir) + "," + Jn("price",g_openPrice,_Digits) + "," + Jn("profit",profit) + "}");
 

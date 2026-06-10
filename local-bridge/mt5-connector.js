@@ -157,7 +157,8 @@ class Mt5Connector extends EventEmitter {
         });
         break;
       case "trade": {
-        const win = (msg.profit ?? 0) >= 0;
+        // The EA already emits the matching "✓ Profit" / "✗ Loss" log line, so
+        // we only surface the trade record here (no duplicate log).
         this.emit("trade", {
           id: msg.ticket ? `t-${msg.ticket}` : `t-${Date.now()}`,
           ts: stamp(),
@@ -169,14 +170,6 @@ class Mt5Connector extends EventEmitter {
         });
         // reset countdown after a trade closes
         s.nextTrade.secondsLeft = s.nextTrade.intervalSeconds;
-        this.emit("log", {
-          id: `log-${Date.now()}`,
-          ts: stamp(),
-          level: win ? "profit" : "loss",
-          text: win
-            ? `✓ Profit: +$${Math.abs(msg.profit ?? 0).toFixed(2)}`
-            : `✗ Loss: -$${Math.abs(msg.profit ?? 0).toFixed(2)}`,
-        });
         break;
       }
       case "log":
