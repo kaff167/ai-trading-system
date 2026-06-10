@@ -1,0 +1,6 @@
+node_modules
+.env
+.bridge-token
+dist
+*.log
+.DS_Store
